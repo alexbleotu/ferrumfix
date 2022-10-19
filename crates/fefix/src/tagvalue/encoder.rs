@@ -56,6 +56,7 @@ where
             buffer,
             initial_buffer_len,
             body_start_i: 0,
+            body_length: None,
         };
         state.set(8, begin_string);
         // The second field is supposed to be `BodyLength(9)`, but obviously
@@ -100,6 +101,7 @@ pub struct EncoderHandle<'a, B, C = Config> {
     buffer: &'a mut B,
     initial_buffer_len: usize,
     body_start_i: usize,
+    body_length: Option<usize>,
 }
 
 impl<'a, B, C> EncoderHandle<'a, B, C>
@@ -116,18 +118,29 @@ where
         (self.buffer.as_slice(), self.initial_buffer_len)
     }
 
+    /// Retrieve the body of a message ignoring the header
+    pub fn body(mut self) -> (&'a [u8], usize) {
+        let body_length = self.body_length();
+        (
+            &self.buffer.as_slice()[self.body_start_i..(self.body_start_i + self.body_length())],
+            body_length,
+        )
+    }
+
     fn body_length_writable_range(&self) -> Range<usize> {
         self.body_start_i - 9..self.body_start_i - 1
     }
 
     fn body_length(&self) -> usize {
-        self.buffer.as_slice().len() - self.body_start_i
+        self.body_length
+            .unwrap_or(self.buffer.as_slice().len() - self.body_start_i)
     }
 
     fn write_body_length(&mut self) {
         use std::io::Write;
 
         let body_length = self.body_length();
+        self.body_length = Some(body_length);
         let body_length_range = self.body_length_writable_range();
         let mut slice = &mut self.buffer.as_mut_slice()[body_length_range];
         write!(slice, "{:08}", body_length).unwrap();
