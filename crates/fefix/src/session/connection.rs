@@ -208,7 +208,23 @@ where
                     }
                 }
                 fix_input = fix_receive_fuse => {
-                    dbglog!("Got input {:?}", fix_input);
+                    match fix_input {
+                        Some(fix_body) => {
+                            if std::cfg!(debug_assertions) {
+                                if let Ok(s) = std::str::from_utf8(fix_body.as_slice()) {
+                                    dbglog!("fix body => {}", s);
+                                } else {
+                                    dbglog!("fix body => {:?}", fix_body.as_slice());
+                                };
+                            };
+                            let fix_message = self.make_fix_message_with_body(fix_body.as_slice());
+                            backend.on_outbound_message(fix_message).ok();
+                            output.write_all(fix_message).await?;
+                        },
+                        None => {
+                            dbglog!("FIX input channel closed");
+                        }
+                    }
                 }
             }
         }
@@ -524,6 +540,30 @@ where
         dbg!("Got an app message");
         self.on_inbound_app_message(msg).ok();
         Response::Application(msg)
+    }
+
+    /// Make a FIX message with the specified body adding session and communication specific tags to a message body
+    ///   * BEGIN_STRING
+    ///   * SENDER_COMP_ID
+    ///   * TARGET_COMP_ID
+    ///   * MSG_SEQ_NUM
+    ///   * SENDING_TIME
+    ///
+    /// The message body is assumed to be in the correct format and containing tags accepted
+    /// by the server
+    fn make_fix_message_with_body(&mut self, message_body: &[u8]) -> &[u8] {
+        let fix_message = {
+            let begin_string = self.config.begin_string();
+            let msg_seq_num = self.seq_numbers.get_incr_outbound();
+            let mut msg =
+                self.encoder
+                    .start_message_with_body(begin_string, &mut self.buffer, message_body);
+            Self::set_sender_and_target(&mut msg, &self.config);
+            msg.set(MSG_SEQ_NUM, msg_seq_num);
+            Self::set_sending_time(&mut msg);
+            msg.done()
+        };
+        fix_message.0
     }
 }
 
