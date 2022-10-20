@@ -37,6 +37,40 @@ where
         Self::default()
     }
 
+    /// Creates a new [`EncoderHandle`] that starts a new FIX message with the specified type
+    /// and also allows to set additional field values. The raw byte contents of the newly created
+    /// FIX message are appended directly at the end of `buffer`.
+    pub fn start_message<'a, B>(
+        &'a mut self,
+        begin_string: &[u8],
+        buffer: &'a mut B,
+        msg_type: &[u8],
+    ) -> EncoderHandle<'a, B, C>
+    where
+        B: Buffer,
+    {
+        let mut state = self.start_empty_message(begin_string, buffer);
+        state.set(35, msg_type);
+        state
+    }
+
+    /// Creates a new [`EncoderHandle`] that starts a new FIX message with the specified body
+    /// and also allows to set additional field values. The raw byte contents of the newly created
+    /// FIX message are appended directly at the end of `buffer`.
+    pub fn start_message_with_body<'a, B>(
+        &'a mut self,
+        begin_string: &[u8],
+        buffer: &'a mut B,
+        msg_body: &[u8],
+    ) -> EncoderHandle<'a, B, C>
+    where
+        B: Buffer,
+    {
+        let mut state = self.start_empty_message(begin_string, buffer);
+        state.set_body(msg_body);
+        state
+    }
+
     /// Creates a new [`EncoderHandle`] that allows to set the field values on a new FIX message
     /// body. The raw byte contents of the newly created FIX message body
     /// are appended directly at the end of `buffer`.
@@ -65,11 +99,10 @@ where
     /// Creates a new [`EncoderHandle`] that allows to set the field values of a
     /// new FIX message. The raw byte contents of the newly created FIX messages
     /// are appended directly at the end of `buffer`.
-    pub fn start_message<'a, B>(
+    fn start_empty_message<'a, B>(
         &'a mut self,
         begin_string: &[u8],
         buffer: &'a mut B,
-        msg_type: &[u8],
     ) -> EncoderHandle<'a, B, C>
     where
         B: Buffer,
@@ -101,7 +134,6 @@ where
         // Eight digits (~100MB) are enough for every message.
         state.set(9, b"00000000" as &[u8]);
         state.body_start_i = state.buffer.len();
-        state.set(35, msg_type);
         state
     }
 }
@@ -174,6 +206,11 @@ where
     fn write_checksum(&mut self) {
         let checksum = CheckSum::compute(self.buffer.as_slice());
         self.set(10, checksum);
+    }
+
+    /// Append a message body - a sequence of tag values separated by the separator
+    pub(self) fn set_body(&mut self, body: &[u8]) {
+        self.buffer.extend_from_slice(body);
     }
 }
 
