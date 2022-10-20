@@ -8,7 +8,9 @@ use crate::tagvalue::{DecoderStreaming, Encoder, EncoderHandle};
 use crate::FieldType;
 use crate::{field_types, FieldMap, StreamingDecoder};
 use crate::{Buffer, SetField};
-use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use futures::{
+    pin_mut, select, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, FutureExt, StreamExt,
+};
 use std::marker::{PhantomData, Unpin};
 use std::pin::Pin;
 use std::time::Duration;
@@ -96,6 +98,7 @@ where
         mut input: I,
         mut output: O,
         mut decoder: DecoderStreaming<Vec<u8>>,
+        mut fix_receiver: futures::channel::mpsc::Receiver<Vec<u8>>,
     ) -> Result<(), FixConnectionError>
     where
         I: AsyncRead + Unpin,
@@ -103,7 +106,7 @@ where
     {
         self.establish_connection(&mut input, &mut output, &mut decoder)
             .await?;
-        self.event_loop(input, output, decoder).await
+        self.event_loop(input, output, decoder, fix_receiver).await
     }
 
     async fn establish_connection<I, O>(
@@ -160,44 +163,53 @@ where
         input: I,
         mut output: O,
         mut decoder: DecoderStreaming<Vec<u8>>,
+        mut fix_receiver: futures::channel::mpsc::Receiver<Vec<u8>>,
     ) -> Result<(), FixConnectionError>
     where
         I: AsyncRead + Unpin,
         O: AsyncWrite + Unpin,
     {
         let mut backend = (&self.backend).clone();
-        let event_loop = &mut LlEventLoop::new(decoder, input, self.heartbeat());
+        let mut event_loop = LlEventLoop::new(decoder, input, self.heartbeat());
+
         loop {
-            let event = event_loop
-                .next_event()
-                .await
-                .ok_or_else(|| FixConnectionError::NotConnected)?;
-            match event {
-                LlEvent::Message(msg) => {
-                    let response = self.on_inbound_message(msg);
-                    match response {
-                        Response::OutboundBytes(bytes) => {
-                            output.write_all(bytes).await?;
-                            backend.on_outbound_message(bytes).ok();
+            let event_loop_fuse = event_loop.next_event().fuse();
+            let fix_receive_fuse = fix_receiver.next().fuse();
+            pin_mut!(event_loop_fuse, fix_receive_fuse);
+            select! {
+                event = event_loop_fuse => {
+                    let event = event.ok_or_else(|| FixConnectionError::NotConnected)?;
+                    match event {
+                        LlEvent::Message(msg) => {
+                            let response = self.on_inbound_message(msg);
+                            match response {
+                                Response::OutboundBytes(bytes) => {
+                                    output.write_all(bytes).await?;
+                                    backend.on_outbound_message(bytes).ok();
+                                }
+                                Response::ResetHeartbeat => {
+                                    // event_loop.ping_heartbeat();
+                                }
+                                _ => {}
+                            }
                         }
-                        Response::ResetHeartbeat => {
-                            event_loop.ping_heartbeat();
+                        LlEvent::BadMessage(_err) => {}
+                        LlEvent::IoError(err) => {
+                            return Err(FixConnectionError::IoError { source: err });
                         }
-                        _ => {}
+                        LlEvent::Heartbeat => {
+                            dbglog!("Sending heartbeat");
+                            let heartbeat = self.on_heartbeat_is_due();
+                            backend.on_outbound_message(heartbeat).ok();
+                            output.write_all(heartbeat).await?;
+                        }
+                        LlEvent::Logout => {}
+                        LlEvent::TestRequest => {}
                     }
                 }
-                LlEvent::BadMessage(_err) => {}
-                LlEvent::IoError(err) => {
-                    return Err(FixConnectionError::IoError { source: err });
+                fix_input = fix_receive_fuse => {
+                    dbglog!("Got input {:?}", fix_input);
                 }
-                LlEvent::Heartbeat => {
-                    dbglog!("Sending heartbeat");
-                    let heartbeat = self.on_heartbeat_is_due();
-                    backend.on_outbound_message(heartbeat).ok();
-                    output.write_all(heartbeat).await?;
-                }
-                LlEvent::Logout => {}
-                LlEvent::TestRequest => {}
             }
         }
     }

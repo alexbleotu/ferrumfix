@@ -140,4 +140,10 @@ pub enum FixConnectionError {
         #[from]
         source: std::io::Error,
     },
+
+    #[error(transparent)]
+    TryRecvError {
+        #[from]
+        source: futures::channel::mpsc::TryRecvError,
+    },
 }
