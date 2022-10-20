@@ -37,6 +37,31 @@ where
         Self::default()
     }
 
+    /// Creates a new [`EncoderHandle`] that allows to set the field values on a new FIX message
+    /// body. The raw byte contents of the newly created FIX message body
+    /// are appended directly at the end of `buffer`.
+    /// The body is not a valid message as is
+    pub fn start_message_body<'a, B>(
+        &'a mut self,
+        buffer: &'a mut B,
+        msg_type: &[u8],
+    ) -> EncoderHandle<'a, B, C>
+    where
+        B: Buffer,
+    {
+        buffer.clear();
+        let initial_buffer_len = buffer.len();
+        let mut state = EncoderHandle {
+            encoder: self,
+            buffer,
+            initial_buffer_len,
+            body_start_i: initial_buffer_len,
+            body_length: None,
+        };
+        state.set(35, msg_type);
+        state
+    }
+
     /// Creates a new [`EncoderHandle`] that allows to set the field values of a
     /// new FIX message. The raw byte contents of the newly created FIX messages
     /// are appended directly at the end of `buffer`.
