@@ -841,6 +841,50 @@ mod test {
         assert_eq!(test_resp.fv::<u32>(TEST_REQ_ID).unwrap(), 100);
     }
 
+    /// Test sending a request via the event loop
+    #[tokio::test]
+    async fn test_send_request_event_loop() {
+        let mut encoder = Encoder::<TagConfig>::new();
+
+        let (mut conn, mut receiver) = conn();
+        let mut decoder = Decoder::<TagConfig>::new(Dictionary::fix44()).streaming(vec![]);
+        let pool = futures::executor::ThreadPool::new().expect("Failed to build pool");
+        let (mut fix_sender, fix_receiver) = futures::channel::mpsc::channel(10);
+        let mut output = Vec::<u8>::new();
+        pool.spawn_ok(async move {
+            conn.event_loop(
+                // Ideally the event loop doesn't interrupt on anything but this works
+                &mut futures::io::repeat(0), // Constantly returns an invalid message
+                &mut output,
+                decoder,
+                fix_receiver,
+            )
+            .await
+            .unwrap();
+        });
+
+        let mut send_msg_buffer = Vec::new();
+        let mut send_msg = encoder.start_message_body(&mut send_msg_buffer, b"1");
+        send_msg.set(SENDER_COMP_ID, "SENDER");
+        send_msg.set(TARGET_COMP_ID, "TARGET");
+        send_msg.set(TEST_REQ_ID, 100);
+
+        // Send message via loop
+        dbglog!("{:?}", std::str::from_utf8(send_msg_buffer.as_slice()));
+        fix_sender.send(send_msg_buffer).await.unwrap();
+        dbglog!("Sent");
+
+        // Backend was called - infer message was sent
+        let mut recv_decoder = Decoder::<TagConfig>::new(Dictionary::fix44());
+        let msg1 = receiver.next().await.unwrap();
+        let backend_msg = recv_decoder.decode(&msg1).unwrap();
+        assert_eq!(backend_msg.fv::<&str>(MSG_TYPE).unwrap(), "1");
+        assert_eq!(backend_msg.fv::<&str>(SENDER_COMP_ID).unwrap(), "SENDER");
+        assert_eq!(backend_msg.fv::<&str>(TARGET_COMP_ID).unwrap(), "TARGET");
+        assert_eq!(backend_msg.fv::<u64>(MSG_SEQ_NUM).unwrap(), 1);
+        assert_eq!(backend_msg.fv::<u32>(TEST_REQ_ID).unwrap(), 100);
+    }
+
     #[test]
     fn test_on_heartbeat_is_due() {
         let conn = &mut conn().0;
