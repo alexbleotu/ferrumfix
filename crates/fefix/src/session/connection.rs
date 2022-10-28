@@ -807,11 +807,13 @@ mod test {
         let (mut conn, mut receiver) = conn();
         let mut decoder = Decoder::<TagConfig>::new(Dictionary::fix44()).streaming(vec![]);
         let pool = futures::executor::ThreadPool::new().expect("Failed to build pool");
+        let (fix_sender, fix_receiver) = futures::channel::mpsc::channel(10);
         pool.spawn_ok(async move {
             conn.event_loop(
                 &mut test_request_buffer.as_slice(),
                 &mut Vec::new(),
                 decoder,
+                fix_receiver,
             )
             .await
             .unwrap();
