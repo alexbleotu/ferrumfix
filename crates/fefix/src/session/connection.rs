@@ -180,7 +180,10 @@ where
             pin_mut!(event_loop_fuse, fix_receive_fuse);
             select! {
                 event = event_loop_fuse => {
-                    let event = event.ok_or_else(|| FixConnectionError::NotConnected)?;
+                    if event.is_none() {
+                        continue
+                    };
+                    let event = event.expect("Already checked");
                     match event {
                         LlEvent::Message(msg) => {
                             let response = self.on_inbound_message(msg);
