@@ -90,7 +90,6 @@ where
             decoder: self,
             raw_decoder,
             is_ready: false,
-            bytes_read: 0,
         }
     }
 
@@ -262,7 +261,6 @@ pub struct DecoderStreaming<B, C = Config> {
     decoder: Decoder<C>,
     raw_decoder: RawDecoderStreaming<B, C>,
     is_ready: bool,
-    bytes_read: usize,
 }
 
 impl<B, C> StreamingDecoder for DecoderStreaming<B, C>
@@ -274,7 +272,7 @@ where
     type Error = DecodeError;
 
     fn num_bytes_read(&self) -> usize {
-        self.bytes_read
+        self.raw_decoder.num_bytes_read()
     }
 
     fn buffer(&mut self) -> &mut Self::Buffer {
@@ -284,7 +282,6 @@ where
     fn clear(&mut self) {
         self.raw_decoder.clear();
         self.is_ready = false;
-        self.bytes_read = 0;
     }
 
     fn num_bytes_required(&self) -> usize {
@@ -327,7 +324,7 @@ where
     }
 
     pub fn add_bytes_read(&mut self, bytes_read: usize) {
-        self.bytes_read += bytes_read;
+        self.raw_decoder.add_bytes_read(bytes_read)
     }
 }
 
@@ -869,7 +866,9 @@ mod test {
         let mut codec = decoder().streaming(vec![]);
         for msg_type in [b"D", b"X"] {
             loop {
+                let input_len = codec.fillable().len();
                 stream.read_exact(codec.fillable()).unwrap();
+                codec.add_bytes_read(input_len);
                 if codec.try_parse().unwrap().is_some() {
                     assert_eq!(codec.message().fv_raw(35), Some(&msg_type[..]));
                     break;
