@@ -299,6 +299,9 @@ where
     fn on_inbound_message<'a>(&'a mut self, msg: Message<'a, &'a [u8]>) -> Response<'a> {
         dbglog!("Got message");
         if self.verifier().verify_test_message_indicator(&msg).is_err() {
+            self.backend
+                .on_inbound_message(msg, false)
+                .unwrap_or_else(|err| dbglog!("Error on wrong test message indicator: {:?}", err));
             return self.on_wrong_environment(msg);
         }
         let seq_num = if let Ok(n) = msg.fv::<u64>(MSG_SEQ_NUM) {
@@ -322,6 +325,9 @@ where
             n
         } else {
             // See §4.5.3.
+            self.backend
+                .on_inbound_message(msg, false)
+                .unwrap_or_else(|err| dbglog!("Error on missing seqnum: {:?}", err));
             return self.on_missing_seqnum(msg);
         };
 
